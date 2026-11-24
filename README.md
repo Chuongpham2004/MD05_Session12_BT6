@@ -98,3 +98,12 @@ curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER     # logout/login lại
 sudo ufw allow 22/tcp && sudo ufw allow 80/tcp && sudo ufw enable
 ```
+
+### Trường hợp VPS đã có Nginx host chiếm cổng 80
+
+VPS thực tế đang chạy Nginx host cho các site khác, nên khi deploy CI đặt
+`GATEWAY_BIND=127.0.0.1:8081` (đổi được qua repo variable `GATEWAY_BIND`):
+gateway container chỉ lắng nghe trên loopback, Nginx host reverse-proxy
+`bt6.chuong.omniev.tech` → `127.0.0.1:8081` (xem `deploy/nginx-host-bt6.conf`).
+Từ Internet vẫn chỉ có **một cửa vào** (cổng 80 của host), `user-service`,
+`order-service`, `db` vẫn hoàn toàn nằm trong `app-network`.

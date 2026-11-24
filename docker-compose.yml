@@ -6,7 +6,10 @@ services:
     image: ghcr.io/${GHCR_OWNER}/md05-session12-bt6-gateway:${IMAGE_TAG:-latest}
     container_name: gateway
     ports:
-      - "80:80"                 # <-- CỔNG DUY NHẤT mở ra ngoài
+      # CỔNG DUY NHẤT của hệ thống. Mặc định "80:80" đúng đề bài.
+      # Trên VPS đã có Nginx host chiếm :80 -> đặt GATEWAY_BIND=127.0.0.1:8081
+      # (chỉ loopback, Nginx host reverse-proxy vào, Internet vẫn không chạm trực tiếp container).
+      - "${GATEWAY_BIND:-80}:80"
     depends_on:
       user-service:
         condition: service_healthy

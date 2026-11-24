@@ -107,12 +107,14 @@ jobs:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
+          # VPS đã có Nginx host giữ :80 -> gateway chỉ bind loopback, Nginx host proxy vào
+          GATEWAY_BIND: ${{ vars.GATEWAY_BIND || '127.0.0.1:8081' }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: GHCR_OWNER,IMAGE_TAG,POSTGRES_PASSWORD,GHCR_USER,GHCR_TOKEN,DEPLOY_DIR
+          envs: GHCR_OWNER,IMAGE_TAG,POSTGRES_PASSWORD,GHCR_USER,GHCR_TOKEN,DEPLOY_DIR,GATEWAY_BIND
           script: |
             set -e
             cd "$HOME/$DEPLOY_DIR"
@@ -123,6 +125,7 @@ jobs:
             POSTGRES_DB=appdb
             POSTGRES_USER=app
             POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+            GATEWAY_BIND=${GATEWAY_BIND}
             ENV
             chmod 600 .env
 
@@ -132,11 +135,13 @@ jobs:
             docker logout ghcr.io
             docker image prune -f
 
-            # Smoke test qua gateway (cổng 80 duy nhất)
+            # Smoke test qua gateway (cổng duy nhất của hệ thống)
+            GW="http://${GATEWAY_BIND/0.0.0.0/localhost}"
+            case "$GATEWAY_BIND" in *:*) ;; *) GW="http://localhost:${GATEWAY_BIND}" ;; esac
             for i in $(seq 1 30); do
-              curl -fs http://localhost/api/users > /dev/null && break
+              curl -fs "$GW/api/users" > /dev/null && break
               sleep 3
             done
-            curl -fsS http://localhost/api/users
-            curl -fsS http://localhost/api/orders
+            curl -fsS "$GW/api/users"
+            curl -fsS "$GW/api/orders"
             docker compose ps
