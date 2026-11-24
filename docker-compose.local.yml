@@ -1,0 +1,9 @@
+# Dùng khi chạy thử trên máy local (build image từ source thay vì pull GHCR):
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+services:
+  gateway:
+    build: ./nginx
+  user-service:
+    build: .
+  order-service:
+    build: .

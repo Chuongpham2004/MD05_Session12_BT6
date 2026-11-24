@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: ${SERVICE_NAME:md05-app}
+  datasource:
+    # "db" là tên service trong docker-compose -> Docker DNS phân giải ra IP container Postgres
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:appdb}
+    username: ${DB_USER:app}
+    password: ${DB_PASSWORD:app}
+    hikari:
+      initialization-fail-timeout: -1   # không chết app nếu DB chưa sẵn sàng
+  sql:
+    init:
+      mode: never
+
+server:
+  port: 8080

@@ -1,0 +1,142 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  APP_IMAGE: md05-session12-bt6-app
+  GATEWAY_IMAGE: md05-session12-bt6-gateway
+  DEPLOY_DIR: md05-bt6   # tương đối so với $HOME của user SSH
+
+jobs:
+  # ---------------------------------------------------------------- CI
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build & test
+        run: chmod +x gradlew && ./gradlew build --no-daemon
+
+      - name: Validate docker-compose.yml
+        env:
+          GHCR_OWNER: dummy
+          POSTGRES_PASSWORD: dummy
+        run: docker compose -f docker-compose.yml config -q
+
+  # ---------------------------------------------------------- Build & push
+  build-and-push:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      owner: ${{ steps.vars.outputs.owner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lowercase owner (GHCR yêu cầu chữ thường)
+        id: vars
+        run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push app image (user-service + order-service)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.vars.outputs.owner }}/${{ env.APP_IMAGE }}:latest
+            ${{ env.REGISTRY }}/${{ steps.vars.outputs.owner }}/${{ env.APP_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+
+      - name: Build & push gateway image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./nginx
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.vars.outputs.owner }}/${{ env.GATEWAY_IMAGE }}:latest
+            ${{ env.REGISTRY }}/${{ steps.vars.outputs.owner }}/${{ env.GATEWAY_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=gateway
+          cache-to: type=gha,mode=max,scope=gateway
+
+  # ---------------------------------------------------------------- CD
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy docker-compose.yml lên VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          source: docker-compose.yml
+          target: ${{ env.DEPLOY_DIR }}
+
+      - name: Deploy qua SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          GHCR_OWNER: ${{ needs.build-and-push.outputs.owner }}
+          IMAGE_TAG: ${{ github.sha }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: GHCR_OWNER,IMAGE_TAG,POSTGRES_PASSWORD,GHCR_USER,GHCR_TOKEN,DEPLOY_DIR
+          script: |
+            set -e
+            cd "$HOME/$DEPLOY_DIR"
+
+            cat > .env <<ENV
+            GHCR_OWNER=${GHCR_OWNER}
+            IMAGE_TAG=${IMAGE_TAG}
+            POSTGRES_DB=appdb
+            POSTGRES_USER=app
+            POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+            ENV
+            chmod 600 .env
+
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker logout ghcr.io
+            docker image prune -f
+
+            # Smoke test qua gateway (cổng 80 duy nhất)
+            for i in $(seq 1 30); do
+              curl -fs http://localhost/api/users > /dev/null && break
+              sleep 3
+            done
+            curl -fsS http://localhost/api/users
+            curl -fsS http://localhost/api/orders
+            docker compose ps

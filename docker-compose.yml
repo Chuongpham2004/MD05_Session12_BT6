@@ -1,0 +1,75 @@
+# Bài tập 6 - Mô hình mạng bảo mật: chỉ gateway được publish port 80 ra Internet.
+name: md05-bt6
+
+services:
+  gateway:
+    image: ghcr.io/${GHCR_OWNER}/md05-session12-bt6-gateway:${IMAGE_TAG:-latest}
+    container_name: gateway
+    ports:
+      - "80:80"                 # <-- CỔNG DUY NHẤT mở ra ngoài
+    depends_on:
+      user-service:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  user-service:
+    image: ghcr.io/${GHCR_OWNER}/md05-session12-bt6-app:${IMAGE_TAG:-latest}
+    environment: &service-env
+      SPRING_PROFILES_ACTIVE: user
+      SERVICE_NAME: user-service
+      DB_HOST: db               # tên service -> Docker DNS
+      DB_NAME: ${POSTGRES_DB:-appdb}
+      DB_USER: ${POSTGRES_USER:-app}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    expose:
+      - "8080"                  # chỉ mở trong network nội bộ, KHÔNG publish
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  order-service:
+    image: ghcr.io/${GHCR_OWNER}/md05-session12-bt6-app:${IMAGE_TAG:-latest}
+    environment:
+      <<: *service-env
+      SPRING_PROFILES_ACTIVE: order
+      SERVICE_NAME: order-service
+    expose:
+      - "8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-appdb}
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # KHÔNG có "ports" -> Postgres không thể truy cập từ Internet
+    networks:
+      - app-network
+    restart: unless-stopped
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  db-data:
